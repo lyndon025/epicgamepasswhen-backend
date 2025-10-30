@@ -560,11 +560,11 @@ xbox_predictor = GameServicePredictor(
     publisher_encoder_path=os.path.join(MODEL_DIR, "publisher_encoder_xbox.pkl"),
     platform_name="Xbox Game Pass",
     avg_repeat_interval=24.0,
-    repeat_confidence_mult=0.75,
+    repeat_confidence_mult=1.25,
     date_column="Added to Service",
     date_format="%m/%d/%Y",
     model_quality_mult=0.75,
-    max_confidence_cap=80,
+    max_confidence_cap=90,
     disclaimer="Moderate uncertainty - Game Pass patterns vary",
     platform_check=check_xbox_platform,
 )
@@ -576,14 +576,15 @@ psplus_predictor = GameServicePredictor(
     publisher_encoder_path=os.path.join(MODEL_DIR, "publisher_encoder_psplus.pkl"),
     platform_name="PS Plus Extra",
     avg_repeat_interval=24.0,
-    repeat_confidence_mult=0.75,
+    repeat_confidence_mult=1.25,
     date_column="Added to Service",
     date_format="%m/%d/%Y",
     model_quality_mult=0.6,
-    max_confidence_cap=70,
+    max_confidence_cap=80,
     disclaimer="High uncertainty - PS Plus catalog patterns are unpredictable",
     platform_check=check_playstation_platform,
 )
+
 
 # ============================================================================
 # API ROUTES
