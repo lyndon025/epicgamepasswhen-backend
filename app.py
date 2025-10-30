@@ -7,12 +7,28 @@ from datetime import datetime
 import os
 
 app = Flask(__name__)
-CORS(app, origins=["*"])
+
+# CORS Configuration - Allow specific origins
+allowed_origins = [
+    "https://epic-gamepass-when.vercel.app",  # Production frontend
+    "http://localhost:5173",  # Local Vite dev server
+    "http://localhost:3000",  # Local fallback
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+]
+
+CORS(
+    app,
+    origins=allowed_origins,
+    supports_credentials=True,
+    allow_headers=["Content-Type", "Authorization"],
+    methods=["GET", "POST", "OPTIONS"],
+)
 
 port = int(os.environ.get("PORT", 5000))
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, "models")
+
 
 # ============================================================================
 # UNIVERSAL PREDICTOR CLASS
