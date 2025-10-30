@@ -3,6 +3,7 @@ from flask_cors import CORS
 import pickle
 import pandas as pd
 import numpy as np
+from difflib import SequenceMatcher
 from datetime import datetime
 import os
 
@@ -181,12 +182,53 @@ class GameServicePredictor:
             return "as good as never (many years)"
 
     def check_if_appeared(self, game_name):
-        """Check if game has appeared in service before"""
+        """Check if game has appeared in service before - with fuzzy matching"""
+
+        # First try exact match
         appearances = self.df[self.df["game_name"].str.lower() == game_name.lower()]
+
+        # If no exact match, try fuzzy matching
+        if len(appearances) == 0:
+            # Compare against all games in CSV using fuzzy matching
+            best_match = None
+            best_score = 0
+            threshold = 0.85  # 85% similarity required
+
+            for csv_game_name in self.df["game_name"].unique():
+                # Normalize both strings: remove punctuation, convert to lowercase
+                normalized_query = "".join(
+                    c for c in game_name.lower() if c.isalnum() or c.isspace()
+                )
+                normalized_csv = "".join(
+                    c for c in csv_game_name.lower() if c.isalnum() or c.isspace()
+                )
+
+                # Calculate similarity
+                similarity = SequenceMatcher(
+                    None, normalized_query, normalized_csv
+                ).ratio()
+
+                if similarity > best_score and similarity >= threshold:
+                    best_score = similarity
+                    best_match = csv_game_name
+
+            if best_match:
+                print(
+                    f"  Fuzzy match: '{game_name}' ≈ '{best_match}' ({best_score:.0%})"
+                )
+                appearances = self.df[
+                    self.df["game_name"].str.lower() == best_match.lower()
+                ]
+            else:
+                print(f"  No match found for '{game_name}'")
+                return None
+        else:
+            print(f"  Exact match: '{game_name}'")
+
         if len(appearances) == 0:
             return None
 
-        # Use the parsed 'added_to_service' column (datetime, not string)
+        # Parse dates from the parsed 'added_to_service' column
         dates = appearances["added_to_service"].dropna().sort_values()
         if len(dates) == 0:
             return {
