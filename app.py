@@ -46,11 +46,19 @@ class GameServicePredictor:
 
         self.df = pd.read_csv(csv_path)
         self.df = self.df[self.df["game_name"].notna()].copy()
+
+        # Parse dates from the ACTUAL column name
         self.df["added_to_service"] = pd.to_datetime(
             self.df[date_column], format=date_format, errors="coerce"
         )
         self.df["release_date"] = pd.to_datetime(
             self.df["release_date"], format=date_format, errors="coerce"
+        )
+
+        print(f"✓ Loaded {len(self.df)} games from {csv_path}")
+        print(f"✓ Date column: {date_column}")
+        print(
+            f"✓ Valid 'added_to_service' dates: {self.df['added_to_service'].notna().sum()}"
         )
 
         with open(xgb_model_path, "rb") as f:
@@ -157,13 +165,19 @@ class GameServicePredictor:
             return "as good as never (many years)"
 
     def check_if_appeared(self, game_name):
+        """Check if game has appeared in service before"""
         appearances = self.df[self.df["game_name"].str.lower() == game_name.lower()]
         if len(appearances) == 0:
             return None
 
+        # Use the parsed 'added_to_service' column (datetime, not string)
         dates = appearances["added_to_service"].dropna().sort_values()
         if len(dates) == 0:
-            return {"appeared": True, "repeat_count": len(appearances)}
+            return {
+                "appeared": True,
+                "repeat_count": len(appearances),
+                "last_appearance": None,
+            }
 
         result = {
             "appeared": True,
@@ -183,37 +197,57 @@ class GameServicePredictor:
         return result
 
     def predict_repeat(self, game_name):
-        history = self.check_if_appeared(game_name)
-        if not history:
+        """TIER 1: Check if game appeared before - MOST RELIABLE"""
+        try:
+            history = self.check_if_appeared(game_name)
+            if not history or not history.get("appeared"):
+                print(f"  {game_name}: Not in history")
+                return None
+
+            last_appearance = history.get("last_appearance")
+            if last_appearance is None or pd.isna(last_appearance):
+                print(f"  {game_name}: In history but no date")
+                return None
+
+            months_since = (datetime.now() - last_appearance).days / 30
+            print(f"  {game_name}: Last appeared {months_since:.1f} months ago")
+
+            if history["repeat_count"] == 1:
+                predicted_months = max(0, self.avg_repeat_interval - months_since)
+                confidence = self._calculate_confidence(1, None, False, True)
+                reasoning = f"Appeared once {months_since:.1f} months ago on {self.platform_name}. Avg repeat interval: ~{self.avg_repeat_interval:.0f} months."
+            else:
+                avg_interval = history.get(
+                    "avg_interval_months", self.avg_repeat_interval
+                )
+                predicted_months = max(0, avg_interval - months_since)
+                confidence = self._calculate_confidence(
+                    history["repeat_count"], history.get("cv"), False, True
+                )
+                reasoning = f"Appeared {history['repeat_count']} times. Avg interval: {avg_interval:.0f} months. Last: {months_since:.0f} months ago."
+
+            if self.disclaimer:
+                reasoning += f" {self.disclaimer}"
+
+            return {
+                "category": self._months_to_bucket(predicted_months),
+                "confidence": confidence,
+                "predicted_months": float(predicted_months),
+                "reasoning": reasoning,
+                "sample_size": history["repeat_count"],
+                "tier": "Historical Lookup (Repeat Pattern)",
+            }
+        except Exception as e:
+            print(f"Error in predict_repeat: {e}")
+            import traceback
+
+            traceback.print_exc()
             return None
 
-        months_since = (datetime.now() - history["last_appearance"]).days / 30
-
-        if history["repeat_count"] == 1:
-            predicted_months = max(0, self.avg_repeat_interval - months_since)
-            confidence = self._calculate_confidence(1, None, False, True)
-            reasoning = f"Appeared once {months_since:.1f} months ago on {self.platform_name}. Avg repeat: ~{self.avg_repeat_interval:.0f} months."
-        else:
-            avg_interval = history["avg_interval_months"]
-            predicted_months = max(0, avg_interval - months_since)
-            confidence = self._calculate_confidence(
-                history["repeat_count"], history["cv"], False, True
-            )
-            reasoning = f"Appeared {history['repeat_count']} times on {self.platform_name}. Avg interval: {avg_interval:.0f} months. {months_since:.1f} months since last."
-
-        if self.disclaimer:
-            reasoning += f" Note: {self.disclaimer}"
-
-        return {
-            "category": self._months_to_bucket(predicted_months),
-            "confidence": confidence,
-            "predicted_months": predicted_months,
-            "reasoning": reasoning,
-            "sample_size": history["repeat_count"],
-            "tier": "Historical Lookup (Repeat Pattern)",
-        }
-
-    def predict_new_xgb(self, game_name, publisher, metacritic_score=None):
+    def predict_new_xgb(
+        self, game_name, publisher, metacritic_score=None, release_date=None
+    ):
+        """TIER 2: Predict new game using XGBoost"""
         if publisher not in self.publisher_encoder.classes_:
             return {
                 "category": "unknown (no record of publisher in service)",
@@ -247,7 +281,17 @@ class GameServicePredictor:
             ]
         )
 
-        predicted_days = self.xgb_model.predict(features)[0]
+        predicted_log_days = self.xgb_model.predict(features)[0]
+
+        # INVERT LOG TRANSFORMATION (if model was trained with log)
+        # Check which platform this is - Epic doesn't use log, Xbox/PS do
+        if self.platform_name in ["Xbox Game Pass", "PS Plus Extra"]:
+            # These were trained with log transformation - invert it
+            predicted_days = np.exp(predicted_log_days)
+        else:
+            # Epic was trained without log - use raw value
+            predicted_days = predicted_log_days
+
         predicted_months = predicted_days / 30
 
         confidence = self._calculate_confidence(
@@ -261,20 +305,30 @@ class GameServicePredictor:
         reasoning = f"XGBoost prediction for {self.platform_name}: {predicted_days:.0f} days ({predicted_months:.0f} months). Publisher '{publisher}' has {int(pub_stats['pub_count'])} games on service."
 
         if self.disclaimer:
-            reasoning += f" Note: {self.disclaimer}"
+            reasoning += f" {self.disclaimer}"
 
         return {
             "category": category,
             "confidence": confidence,
-            "predicted_months": predicted_months,
-            "predicted_days": predicted_days,
+            "predicted_months": float(predicted_months),
+            "predicted_days": float(predicted_days),
             "reasoning": reasoning,
             "publisher_game_count": int(pub_stats["pub_count"]),
             "publisher_consistency": float(pub_stats["pub_cv"]),
             "tier": "XGBoost ML Prediction (New Game)",
         }
 
-    def predict(self, game_name, publisher=None, metacritic_score=None, platforms=None):
+    def predict(
+        self,
+        game_name,
+        publisher=None,
+        metacritic_score=None,
+        platforms=None,
+        release_date=None,
+    ):
+        """Main prediction method - Priority checks"""
+
+        # PRIORITY 1: First-party publisher check
         if publisher:
             first_party_result = self._check_first_party_publisher(publisher)
             if first_party_result:
@@ -284,6 +338,7 @@ class GameServicePredictor:
                     **first_party_result,
                 }
 
+        # PRIORITY 2: Platform compatibility check (OPTIONAL)
         if self.platform_check and platforms:
             try:
                 platform_result = self.platform_check(platforms, self.platform_name)
@@ -292,10 +347,17 @@ class GameServicePredictor:
             except Exception as e:
                 print(f"Platform check failed: {e}")
 
-        repeat_pred = self.predict_repeat(game_name)
-        if repeat_pred:
-            return {"game_name": game_name, **repeat_pred}
+        # PRIORITY 3: Check for repeat pattern (BEFORE ML - this is more reliable)
+        # If game already appeared, use historical data
+        try:
+            repeat_pred = self.predict_repeat(game_name)
+            if repeat_pred:
+                print(f"✓ Using repeat pattern for {game_name}")
+                return {"game_name": game_name, **repeat_pred}
+        except Exception as e:
+            print(f"Repeat prediction error: {e}")
 
+        # PRIORITY 4: XGBoost prediction for NEW games (only if not in history)
         if not publisher:
             return {
                 "game_name": game_name,
@@ -305,7 +367,10 @@ class GameServicePredictor:
                 "reasoning": "No publisher provided and no historical data available.",
             }
 
-        new_pred = self.predict_new_xgb(game_name, publisher, metacritic_score)
+        print(f"→ {game_name} not in history, using ML prediction")
+        new_pred = self.predict_new_xgb(
+            game_name, publisher, metacritic_score, release_date
+        )
         return {"game_name": game_name, "publisher": publisher, **new_pred}
 
 
@@ -423,7 +488,7 @@ epic_predictor = GameServicePredictor(
     avg_repeat_interval=18.9,
     repeat_confidence_mult=1.0,
     date_column="Added to Service",
-    date_format="%m/%d/%Y",
+    date_format="%Y-%m-%d",
     model_quality_mult=1.0,
     max_confidence_cap=95,
     disclaimer="",
@@ -439,7 +504,7 @@ xbox_predictor = GameServicePredictor(
     avg_repeat_interval=24.0,
     repeat_confidence_mult=0.75,
     date_column="Added to Service",
-    date_format="%Y-%m-%d",
+    date_format="%m/%d/%Y",
     model_quality_mult=0.75,
     max_confidence_cap=80,
     disclaimer="Moderate uncertainty - Game Pass patterns vary",
@@ -455,7 +520,7 @@ psplus_predictor = GameServicePredictor(
     avg_repeat_interval=24.0,
     repeat_confidence_mult=0.75,
     date_column="Added to Service",
-    date_format="%Y-%m-%d",
+    date_format="%m/%d/%Y",
     model_quality_mult=0.6,
     max_confidence_cap=70,
     disclaimer="High uncertainty - PS Plus catalog patterns are unpredictable",
@@ -470,6 +535,15 @@ psplus_predictor = GameServicePredictor(
 @app.route("/api/predict", methods=["POST"])
 def predict():
     data = request.json
+
+    # DEBUG: Print all data received
+    print(f"\n{'='*70}")
+    print("RECEIVED DATA:")
+    print(f"  game_name: {data.get('game_name')}")
+    print(f"  release_date: {data.get('release_date')}")
+    print(f"  metacritic_score: {data.get('metacritic_score')}")
+    print(f"{'='*70}\n")
+
     platform = data.get("platform", "epic")
     game_name = data.get("game_name", "Unknown")
     publisher = data.get("publisher")
@@ -502,6 +576,7 @@ def predict():
             publisher=publisher,
             metacritic_score=metacritic_score,
             platforms=platforms,
+            release_date=data.get("release_date"),
         )
 
         def serialize_value(value):
