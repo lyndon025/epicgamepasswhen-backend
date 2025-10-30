@@ -61,12 +61,11 @@ class GameServicePredictor:
                     'reasoning': f"Microsoft first-party title. All {publisher} games release Day One on Xbox Game Pass Ultimate and PC Game Pass.",
                     'first_party': True,
                     'available_on': ['Xbox Game Pass Ultimate', 'PC Game Pass'],
-                    # ADD REAL DATA FIELDS
-                    'predicted_months': 0,  # Day One means 0 months wait
-                    'predicted_days': 0,  # Day One means 0 days wait
-                    'publisher_game_count': None,  # Not applicable for first-party
-                    'publisher_consistency': None,  # Not applicable for first-party
-                    'sample_size': None  # Not applicable for first-party
+                    'predicted_months': 0.0,  # Ensure float
+                    'predicted_days': 0.0,  # Ensure float
+                    'publisher_game_count': None,
+                    'publisher_consistency': None,
+                    'sample_size': None
                 }
         
         # PS Plus - Sony first-party
@@ -77,19 +76,19 @@ class GameServicePredictor:
                     'tier': 'First-Party Publisher',
                     'category': 'Likely (within 12-24 months)',
                     'confidence': 75,
-                    'reasoning': f"Sony first-party title from {publisher}. PlayStation Studios games typically join PS Plus Extra catalog within 12-24 months, though exact timing varies by strategic decisions.",
+                    'reasoning': f"Sony first-party title from {publisher}. PlayStation Studios games typically join PS Plus Extra catalog within 12-24 months.",
                     'first_party': True,
-                    # ADD REAL DATA FIELDS
-                    'predicted_months': 18,  # Average 18 months for Sony first-party
-                    'predicted_days': 540,  # 18 months = 540 days
-                    'publisher_game_count': None,  # Not applicable for first-party
-                    'publisher_consistency': None,  # Not applicable for first-party
-                    'sample_size': None  # Not applicable for first-party
+                    'predicted_months': 18.0,  # Ensure float
+                    'predicted_days': 540.0,  # Ensure float
+                    'publisher_game_count': None,
+                    'publisher_consistency': None,
+                    'sample_size': None
                 }
         
         return None
 
-    
+
+        
     def _calculate_confidence(self, sample_size, variance_coefficient=None, has_metacritic=False, is_repeat=False):
         if is_repeat:
             if sample_size >= 3:
@@ -246,87 +245,133 @@ class GameServicePredictor:
         }
     
     def predict(self, game_name, publisher=None, metacritic_score=None, platforms=None):
-        # PRIORITY 1: First-party publisher check (NEW)
-        if publisher:
-            first_party_result = self._check_first_party_publisher(publisher)
-            if first_party_result:
-                return {'game_name': game_name, 'publisher': publisher, **first_party_result}
-        
-        # PRIORITY 2: Platform compatibility check
-        if self.platform_check and platforms:
-            platform_result = self.platform_check(platforms, self.platform_name)
-            if platform_result:
-                return {'game_name': game_name, **platform_result}
-        
-        # TIER 1: Check for repeat pattern
-        repeat_pred = self.predict_repeat(game_name)
-        if repeat_pred:
-            return {'game_name': game_name, **repeat_pred}
-        
-        # TIER 2: XGBoost prediction
-        if not publisher:
-            return {
-                'game_name': game_name,
-                'tier': 'Unknown',
-                'category': 'unknown (no record of publisher in service)',
-                'confidence': 0,
-                'reasoning': 'No publisher provided and no historical data available.'
-            }
-        
-        new_pred = self.predict_new_xgb(game_name, publisher, metacritic_score)
-        return {'game_name': game_name, 'publisher': publisher, **new_pred}
+        """Main prediction method with first-party and platform checks"""
+                # PRIORITY 1: First-party publisher check
+                if publisher:
+                    first_party_result = self._check_first_party_publisher(publisher)
+                    if first_party_result:
+                        return {'game_name': game_name, 'publisher': publisher, **first_party_result}
+                
+                # PRIORITY 2: Platform compatibility check (OPTIONAL - might return None)
+                if self.platform_check and platforms:
+                    try:
+                        platform_result = self.platform_check(platforms, self.platform_name)
+                        if platform_result:  # Only return if check found an issue
+                            return {'game_name': game_name, **platform_result}
+                    except Exception as e:
+                        print(f"Platform check failed gracefully: {e}")
+                        # Continue to next check
+                
+                # TIER 1: Check for repeat pattern
+                repeat_pred = self.predict_repeat(game_name)
+                if repeat_pred:
+                    return {'game_name': game_name, **repeat_pred}
+                
+                # TIER 2: XGBoost prediction
+                if not publisher:
+                    return {
+                        'game_name': game_name,
+                        'tier': 'Unknown',
+                        'category': 'unknown (no record of publisher in service)',
+                        'confidence': 0,
+                        'reasoning': 'No publisher provided and no historical data available.'
+                    }
+                
+                new_pred = self.predict_new_xgb(game_name, publisher, metacritic_score)
+                return {'game_name': game_name, 'publisher': publisher, **new_pred}
+
 
 # ============================================================================
 # PLATFORM CHECKS
 # ============================================================================
 
-def check_pc_platform(platforms_data, platform_name):
-    if not platforms_data:
+       def check_pc_platform(platforms_data, platform_name):
+        """Check if game is on PC (for Epic) - OPTIONAL CHECK"""
+        if not platforms_data or len(platforms_data) == 0:
+            # No platform data = assume it might be available, let ML decide
+            return None
+        
+        try:
+            pc_keywords = ['pc', 'windows', 'linux', 'macos']
+            platform_names = [p.get('platform', {}).get('name', '').lower() for p in platforms_data if p and isinstance(p, dict)]
+            
+            if not platform_names:
+                # Empty platform list = assume it might be available
+                return None
+            
+            is_pc = any(keyword in ' '.join(platform_names) for keyword in pc_keywords)
+            
+            if not is_pc:
+                return {
+                    'tier': 'Platform Check',
+                    'category': 'not on pc (console exclusive)',
+                    'confidence': 95,
+                    'reasoning': f"Game is not available on PC. Available on: {', '.join([p for p in platform_names if p])}. Epic Games Store only offers PC games.",
+                    'platforms': platform_names
+                }
+        except Exception as e:
+            print(f"Platform check error (Epic): {e}")
+            # If anything fails, skip the check and let ML predict
+            return None
+        
         return None
-    pc_keywords = ['pc', 'windows', 'linux', 'macos']
-    platform_names = [p.get('platform', {}).get('name', '').lower() for p in platforms_data]
-    is_pc = any(keyword in ' '.join(platform_names) for keyword in pc_keywords)
-    if not is_pc:
-        return {
-            'tier': 'Platform Check',
-            'category': 'not on pc (console exclusive)',
-            'confidence': 95,
-            'reasoning': f"Game is not available on PC. Available on: {', '.join([p for p in platform_names if p])}. Epic Games Store only offers PC games.",
-            'platforms': platform_names
-        }
-    return None
 
-def check_xbox_platform(platforms_data, platform_name):
-    if not platforms_data:
+    def check_xbox_platform(platforms_data, platform_name):
+        """Check if game is on Xbox/PC (for Game Pass) - OPTIONAL CHECK"""
+        if not platforms_data or len(platforms_data) == 0:
+            return None
+        
+        try:
+            xbox_keywords = ['xbox', 'pc', 'windows']
+            platform_names = [p.get('platform', {}).get('name', '').lower() for p in platforms_data if p and isinstance(p, dict)]
+            
+            if not platform_names:
+                return None
+            
+            is_xbox = any(keyword in ' '.join(platform_names) for keyword in xbox_keywords)
+            
+            if not is_xbox:
+                return {
+                    'tier': 'Platform Check',
+                    'category': 'not on xbox/pc',
+                    'confidence': 95,
+                    'reasoning': f"Game is not available on Xbox or PC. Available on: {', '.join([p for p in platform_names if p])}. Xbox Game Pass requires Xbox or PC platform.",
+                    'platforms': platform_names
+                }
+        except Exception as e:
+            print(f"Platform check error (Xbox): {e}")
+            return None
+        
         return None
-    xbox_keywords = ['xbox', 'pc', 'windows']
-    platform_names = [p.get('platform', {}).get('name', '').lower() for p in platforms_data]
-    is_xbox = any(keyword in ' '.join(platform_names) for keyword in xbox_keywords)
-    if not is_xbox:
-        return {
-            'tier': 'Platform Check',
-            'category': 'not on xbox/pc',
-            'confidence': 95,
-            'reasoning': f"Game is not available on Xbox or PC. Available on: {', '.join([p for p in platform_names if p])}. Xbox Game Pass requires Xbox or PC platform.",
-            'platforms': platform_names
-        }
-    return None
 
-def check_playstation_platform(platforms_data, platform_name):
-    if not platforms_data:
+    def check_playstation_platform(platforms_data, platform_name):
+        """Check if game is on PlayStation (for PS Plus) - OPTIONAL CHECK"""
+        if not platforms_data or len(platforms_data) == 0:
+            return None
+        
+        try:
+            ps_keywords = ['playstation', 'ps4', 'ps5']
+            platform_names = [p.get('platform', {}).get('name', '').lower() for p in platforms_data if p and isinstance(p, dict)]
+            
+            if not platform_names:
+                return None
+            
+            is_ps = any(keyword in ' '.join(platform_names) for keyword in ps_keywords)
+            
+            if not is_ps:
+                return {
+                    'tier': 'Platform Check',
+                    'category': 'not on playstation',
+                    'confidence': 95,
+                    'reasoning': f"Game is not available on PlayStation. Available on: {', '.join([p for p in platform_names if p])}. PS Plus requires PlayStation platform.",
+                    'platforms': platform_names
+                }
+        except Exception as e:
+            print(f"Platform check error (PS): {e}")
+            return None
+        
         return None
-    ps_keywords = ['playstation', 'ps4', 'ps5']
-    platform_names = [p.get('platform', {}).get('name', '').lower() for p in platforms_data]
-    is_ps = any(keyword in ' '.join(platform_names) for keyword in ps_keywords)
-    if not is_ps:
-        return {
-            'tier': 'Platform Check',
-            'category': 'not on playstation',
-            'confidence': 95,
-            'reasoning': f"Game is not available on PlayStation. Available on: {', '.join([p for p in platform_names if p])}. PS Plus requires PlayStation platform.",
-            'platforms': platform_names
-        }
-    return None
+
 
 # ============================================================================
 # INITIALIZE PREDICTORS
@@ -388,46 +433,99 @@ psplus_predictor = GameServicePredictor(
 
 @app.route('/api/predict', methods=['POST'])
 def predict():
-    data = request.json
-    platform = data.get('platform', 'epic')
-    
-    if platform == 'epic':
-        predictor = epic_predictor
-    elif platform == 'gamepass':
-        predictor = xbox_predictor
-    elif platform == 'psplus':  # ADD THIS LINE
-        predictor = psplus_predictor  # ADD THIS LINE
-    else:
-        return jsonify({'error': f'Unknown platform: {platform}'}), 400
-
-    
-    result = predictor.predict(
-        game_name=data.get('game_name'),
-        publisher=data.get('publisher'),
-        metacritic_score=data.get('metacritic_score'),
-        platforms=data.get('platforms')
-    )
-    
-    # FIXED: Better serialization that handles lists and arrays
-    serializable = {}
-    for key, value in result.items():
-        # Handle lists and arrays directly
-        if isinstance(value, (list, tuple)):
-            serializable[key] = value
-        # Handle numpy numbers
-        elif isinstance(value, (np.integer, np.floating)):
-            if np.isnan(value):
-                serializable[key] = None
-            else:
-                serializable[key] = float(value)
-        # Handle pandas NA/NaN (scalars only)
-        elif value is None or (isinstance(value, float) and pd.isna(value)):
-            serializable[key] = None
-        # Everything else (strings, bools, etc.)
+    try:
+        data = request.json
+        platform = data.get('platform', 'epic')
+        game_name = data.get('game_name', 'Unknown')
+        publisher = data.get('publisher')
+        metacritic_score = data.get('metacritic_score')
+        platforms = data.get('platforms')
+        
+        print(f"\n{'='*60}")
+        print(f"PREDICTION REQUEST: {game_name}")
+        print(f"Platform: {platform} | Publisher: {publisher}")
+        print(f"{'='*60}")
+        
+        # Select predictor
+        if platform == 'epic':
+            predictor = epic_predictor
+        elif platform == 'gamepass':
+            predictor = xbox_predictor
+        elif platform == 'psplus':
+            predictor = psplus_predictor
         else:
-            serializable[key] = value
+            return jsonify({'error': f'Unknown platform: {platform}'}), 400
+        
+        # Sanitize inputs
+        if platforms and not isinstance(platforms, list):
+            platforms = None
+        
+        if metacritic_score:
+            try:
+                metacritic_score = float(metacritic_score)
+                if metacritic_score < 0 or metacritic_score > 100:
+                    metacritic_score = None
+            except (ValueError, TypeError):
+                metacritic_score = None
+        
+        # Get prediction
+        result = predictor.predict(
+            game_name=game_name,
+            publisher=publisher,
+            metacritic_score=metacritic_score,
+            platforms=platforms
+        )
+        
+        print(f"Result: {result.get('category', 'unknown')}")
+        
+        # Serialize to JSON-safe format
+        def serialize_value(value):
+            """Convert all values to JSON-serializable format"""
+            if value is None:
+                return None
+            elif isinstance(value, bool):
+                return bool(value)
+            elif isinstance(value, (int, float)):
+                # Handle numpy types
+                if pd.isna(value) or np.isnan(value) if isinstance(value, float) else False:
+                    return None
+                return float(value) if isinstance(value, float) else int(value)
+            elif isinstance(value, (list, tuple)):
+                return [serialize_value(v) for v in value]
+            elif isinstance(value, dict):
+                return {k: serialize_value(v) for k, v in value.items()}
+            elif isinstance(value, (np.integer, np.floating)):
+                if np.isnan(value):
+                    return None
+                return float(value)
+            else:
+                return str(value)
+        
+        # Apply serialization
+        serializable = {}
+        for key, value in result.items():
+            serializable[key] = serialize_value(value)
+        
+        print(f"Serialized successfully\n")
+        return jsonify(serializable)
     
-    return jsonify(serializable)
+    except Exception as e:
+        print(f"\nERROR: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        # Return error in safe format
+        error_response = {
+            'game_name': game_name,
+            'error': f'{type(e).__name__}: {str(e)}',
+            'category': 'error',
+            'confidence': 0,
+            'tier': 'Error',
+            'reasoning': 'An error occurred while processing your request. Check backend logs for details.'
+        }
+        return jsonify(error_response), 500
+
+
 
 
 @app.route('/api/health', methods=['GET'])
