@@ -7,7 +7,7 @@ from datetime import datetime
 import os
 
 app = Flask(__name__)
-CORS(app, origins=["*"])
+CORS(app)
 
 port = int(os.environ.get('PORT', 5000))
 
