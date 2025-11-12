@@ -94,17 +94,56 @@ class GameServicePredictor:
         publisher_lower = publisher.lower()
 
         if self.platform_name == "Xbox Game Pass":
+            # Core Microsoft Studios
             ms_keywords = ["microsoft", "xbox game studios", "xbox publishing"]
+
+            # Microsoft-owned studios (Activision-Blizzard & Bethesda acquisitions)
+            activision_keywords = ["activision", "blizzard"]
+            bethesda_keywords = ["bethesda"]
+
+            # Check if it's core Microsoft
             if any(keyword in publisher_lower for keyword in ms_keywords):
                 return {
                     "tier": "First-Party Publisher",
-                    "category": "Day One (Game Pass Ultimate & PC)",
+                    "category": "Day One",
                     "confidence": 99,
-                    "reasoning": f"Microsoft first-party title. All {publisher} games release Day One on Xbox Game Pass Ultimate and PC Game Pass.",
+                    "reasoning": f"Microsoft first-party title. All {publisher} games are available Day One on Xbox Game Pass.",
                     "first_party": True,
                     "available_on": ["Xbox Game Pass Ultimate", "PC Game Pass"],
                     "predicted_months": 0.0,
                     "predicted_days": 0.0,
+                    "publisher_game_count": None,
+                    "publisher_consistency": None,
+                    "sample_size": None,
+                }
+
+            # Check if it's Activision-Blizzard (Microsoft-owned since 2023)
+            if any(keyword in publisher_lower for keyword in activision_keywords):
+                return {
+                    "tier": "Microsoft-Owned (Activision-Blizzard)",
+                    "category": "Very Likely (Staggered Release)",
+                    "confidence": 85,
+                    "reasoning": f"{publisher} is owned by Microsoft (acquired 2023). Games are joining Game Pass on a staggered schedule. Newer titles are highly likely to arrive soon.",
+                    "first_party": True,
+                    "available_on": ["Xbox Game Pass Ultimate", "PC Game Pass"],
+                    "predicted_months": 3.0,
+                    "predicted_days": 90.0,
+                    "publisher_game_count": None,
+                    "publisher_consistency": None,
+                    "sample_size": None,
+                }
+
+            # Check if it's Bethesda (Microsoft-owned since 2021)
+            if any(keyword in publisher_lower for keyword in bethesda_keywords):
+                return {
+                    "tier": "Microsoft-Owned (Bethesda/ZeniMax)",
+                    "category": "Very Likely (Within 6 Months)",
+                    "confidence": 90,
+                    "reasoning": f"{publisher} is owned by Microsoft (acquired 2021). Most Bethesda titles join Game Pass within 6 months, often Day One for new releases.",
+                    "first_party": True,
+                    "available_on": ["Xbox Game Pass Ultimate", "PC Game Pass"],
+                    "predicted_months": 3.0,
+                    "predicted_days": 90.0,
                     "publisher_game_count": None,
                     "publisher_consistency": None,
                     "sample_size": None,
@@ -284,6 +323,9 @@ class GameServicePredictor:
                 )
                 reasoning = f"Appeared {history['repeat_count']} times. Avg interval: {avg_interval:.0f} months. Last: {months_since:.0f} months ago."
 
+            # Check if game appeared recently (within 12 months)
+            recently_appeared = months_since <= 12
+
             if self.disclaimer:
                 reasoning += f" {self.disclaimer}"
 
@@ -294,6 +336,10 @@ class GameServicePredictor:
                 "reasoning": reasoning,
                 "sample_size": history["repeat_count"],
                 "tier": "Historical Lookup (Repeat Pattern)",
+                "recently_appeared": recently_appeared,  # ← ADD THIS FLAG
+                "months_since_last": float(
+                    months_since
+                ),  # ← OPTIONAL: for more precise display
             }
         except Exception as e:
             print(f"Error in predict_repeat: {e}")
@@ -390,6 +436,34 @@ class GameServicePredictor:
         if publisher:
             first_party_result = self._check_first_party_publisher(publisher)
             if first_party_result:
+                # For Xbox first-party, check if game is already released
+                if self.platform_name == "Xbox Game Pass" and release_date:
+                    try:
+                        release_dt = pd.to_datetime(release_date, errors="coerce")
+                        if pd.notna(release_dt):
+                            now = datetime.now()
+
+                            if release_dt > now:
+                                # Game hasn't released yet - Day One
+                                days_until_release = (release_dt - now).days
+                                first_party_result["category"] = (
+                                    "Day One (Available at Game Release)"
+                                )
+                                first_party_result["reasoning"] = (
+                                    f"Microsoft first-party title. Will be available Day One on Xbox Game Pass when it releases in {days_until_release} days."
+                                )
+                            else:
+                                # Game already released - should be available now
+                                days_since_release = (now - release_dt).days
+                                first_party_result["category"] = (
+                                    "Available Now (Very Soon if Not Yet Added)"
+                                )
+                                first_party_result["reasoning"] = (
+                                    f"Microsoft first-party title released {days_since_release} days ago. Should already be available on Xbox Game Pass Ultimate and PC Game Pass, or coming very soon."
+                                )
+                    except Exception as e:
+                        print(f"Error parsing release date: {e}")
+
                 return {
                     "game_name": game_name,
                     "publisher": publisher,
@@ -405,8 +479,7 @@ class GameServicePredictor:
             except Exception as e:
                 print(f"Platform check failed: {e}")
 
-        # PRIORITY 3: Check for repeat pattern (BEFORE ML - this is more reliable)
-        # If game already appeared, use historical data
+        # PRIORITY 3: Check for repeat pattern (old games)
         try:
             repeat_pred = self.predict_repeat(game_name)
             if repeat_pred:
@@ -415,7 +488,7 @@ class GameServicePredictor:
         except Exception as e:
             print(f"Repeat prediction error: {e}")
 
-        # PRIORITY 4: XGBoost prediction for NEW games (only if not in history)
+        # PRIORITY 4: XGBoost prediction for NEW games
         if not publisher:
             return {
                 "game_name": game_name,
