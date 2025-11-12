@@ -3,6 +3,7 @@ from flask_cors import CORS
 import pickle
 import pandas as pd
 import numpy as np
+import re
 from difflib import SequenceMatcher
 from datetime import datetime
 import os
@@ -29,7 +30,6 @@ CORS(
 port = int(os.environ.get("PORT", 5000))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, "models")
-
 
 # ============================================================================
 # UNIVERSAL PREDICTOR CLASS
@@ -85,6 +85,17 @@ class GameServicePredictor:
 
         self.publisher_stats = pd.read_csv(publisher_stats_path)
         self.median_metacritic = 75
+
+    def normalize_title(self, title):
+        """Remove all punctuation except spaces, convert to lowercase"""
+        return "".join(c for c in title.lower() if c.isalnum() or c.isspace())
+
+    def extract_numeral(self, title):
+        """Extract numeral suffix (Roman or digit) from title"""
+        # Strip all punctuation before searching for numerals
+        cleaned_title = re.sub(r"[^a-z0-9ivxlcdm\s]", "", title.lower())
+        match = re.search(r"\b([ivxlcdm]+|\d+)$", cleaned_title)
+        return match.group(1) if match else None
 
     def _check_first_party_publisher(self, publisher):
         """Check if publisher is a first-party publisher for this platform"""
@@ -228,26 +239,28 @@ class GameServicePredictor:
 
         # If no exact match, try fuzzy matching
         if len(appearances) == 0:
-            # Compare against all games in CSV using fuzzy matching
             best_match = None
             best_score = 0
-            threshold = 0.85  # 85% similarity required
+            threshold = 0.90  # Threshold for fuzzy matching
+
+            # Extract numeral from query
+            query_numeral = self.extract_numeral(game_name)
+            normalized_query = self.normalize_title(game_name)
 
             for csv_game_name in self.df["game_name"].unique():
-                # Normalize both strings: remove punctuation, convert to lowercase
-                normalized_query = "".join(
-                    c for c in game_name.lower() if c.isalnum() or c.isspace()
-                )
-                normalized_csv = "".join(
-                    c for c in csv_game_name.lower() if c.isalnum() or c.isspace()
-                )
-
-                # Calculate similarity
+                normalized_csv = self.normalize_title(csv_game_name)
                 similarity = SequenceMatcher(
                     None, normalized_query, normalized_csv
                 ).ratio()
 
-                if similarity > best_score and similarity >= threshold:
+                csv_numeral = self.extract_numeral(csv_game_name)
+
+                # Only accept match if numerals match or both None
+                if (
+                    similarity > best_score
+                    and similarity >= threshold
+                    and query_numeral == csv_numeral
+                ):
                     best_score = similarity
                     best_match = csv_game_name
 
@@ -336,10 +349,8 @@ class GameServicePredictor:
                 "reasoning": reasoning,
                 "sample_size": history["repeat_count"],
                 "tier": "Historical Lookup (Repeat Pattern)",
-                "recently_appeared": recently_appeared,  # ← ADD THIS FLAG
-                "months_since_last": float(
-                    months_since
-                ),  # ← OPTIONAL: for more precise display
+                "recently_appeared": recently_appeared,
+                "months_since_last": float(months_since),
             }
         except Exception as e:
             print(f"Error in predict_repeat: {e}")
