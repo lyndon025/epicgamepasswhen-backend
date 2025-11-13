@@ -13,6 +13,8 @@ app = Flask(__name__)
 # CORS Configuration - Allow specific origins
 allowed_origins = [
     "https://epic-gamepass-when.vercel.app",  # Production frontend
+    "https://epic-gamepass-when-git-main-lyndon025s-projects.vercel.app",
+    "https://epic-gamepass-when-git-dev-lyndon025s-projects.vercel.app",
     "http://localhost:5173",  # Local Vite dev server
     "http://localhost:3000",  # Local fallback
     "http://127.0.0.1:5173",
