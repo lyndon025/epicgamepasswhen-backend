@@ -326,7 +326,7 @@ class GameServicePredictor:
                     "category": "Very unlikely (Already Appeared)",
                     "confidence": 95,
                     "predicted_months": 0,
-                    "reasoning": f"This game has already appeared in a Humble Choice/Monthly bundle ({last_date_str}). Repeat appearances are extremely rare.",
+                    "reasoning": f"This game has already appeared in a Humble Choice/Monthly bundle ({last_date_str}). Repeat appearances have never happened before (as of January 2026).",
                     "sample_size": history["repeat_count"],
                     "tier": "Historical Lookup (Humble No-Repeat Rule)",
                     "recently_appeared": False,
