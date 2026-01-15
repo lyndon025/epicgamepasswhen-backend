@@ -241,5 +241,20 @@ def health():
     )
 
 
+@app.route("/api/leaderboard", methods=["GET"])
+def leaderboard():
+    # Mock Leaderboard for Local Dev (since Redis is cloud-only)
+    # This prevents 404s when running locally without 'vercel dev'
+    platform = request.args.get("platform", "Global")
+    return jsonify({
+        "platform": platform,
+        "leaderboard": [
+            {"rank": 1, "game": "Local Dev Mock Game 1", "score": 100},
+            {"rank": 2, "game": "Local Dev Mock Game 2", "score": 90},
+            {"rank": 3, "game": "Use 'vercel dev' for Real Data", "score": 80}
+        ]
+    })
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=port, debug=False)
