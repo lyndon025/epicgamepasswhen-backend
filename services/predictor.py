@@ -34,13 +34,9 @@ class GameServicePredictor:
         self.df = pd.read_csv(csv_path)
         self.df = self.df[self.df["game_name"].notna()].copy()
 
-        # Parse dates from the ACTUAL column name
-        self.df["added_to_service"] = pd.to_datetime(
-            self.df[date_column], format=date_format, errors="coerce"
-        )
-        self.df["release_date"] = pd.to_datetime(
-            self.df["release_date"], format=date_format, errors="coerce"
-        )
+        # Parse dates from the ACTUAL column name using robust parser
+        self.df["added_to_service"] = self.df[date_column].apply(self._parse_date_robust)
+        self.df["release_date"] = self.df["release_date"].apply(self._parse_date_robust)
 
         print(f"✓ Loaded {len(self.df)} games from {csv_path}")
         print(f"✓ Date column: {date_column}")
@@ -55,6 +51,29 @@ class GameServicePredictor:
 
         self.publisher_stats = pd.read_csv(publisher_stats_path)
         self.median_metacritic = 75
+
+    def _parse_date_robust(self, date_str):
+        if pd.isna(date_str):
+            return pd.NaT
+        
+        date_str = str(date_str).strip().strip('"') # Remove quotes if present
+        
+        formats = [
+            "%m/%d/%Y",      # 01/20/2026
+            "%Y-%m-%d",      # 2026-01-20
+            "%B %d, %Y",     # July 17, 2025
+            "%b %d, %Y",     # Jul 17, 2025
+            "%d-%b-%y",      # 20-Jan-26 (rare but possible)
+        ]
+        
+        for fmt in formats:
+            try:
+                return pd.to_datetime(date_str, format=fmt)
+            except:
+                continue
+                
+        # Fallback
+        return pd.to_datetime(date_str, errors="coerce")
 
     def normalize_title(self, title):
         """Remove all punctuation except spaces, convert to lowercase"""
@@ -80,15 +99,15 @@ class GameServicePredictor:
 
             # Microsoft-owned studios (Activision-Blizzard & Bethesda acquisitions)
             activision_keywords = ["activision", "blizzard"]
-            bethesda_keywords = ["bethesda"]
+            bethesda_keywords = ["bethesda", "zenimax"]
 
             # Check if it's core Microsoft
             if any(keyword in publisher_lower for keyword in ms_keywords):
                 return {
                     "tier": "First-Party Publisher",
-                    "category": "Day One",
+                    "category": "Day One (Xbox Game Pass Ultimate)",
                     "confidence": 99,
-                    "reasoning": f"Microsoft first-party title. All {publisher} games are available Day One on Xbox Game Pass.",
+                    "reasoning": f"Microsoft first-party title. Available Day One on Xbox Game Pass Ultimate & PC Game Pass (Standard tier may not include Day One titles).",
                     "first_party": True,
                     "available_on": ["Xbox Game Pass Ultimate", "PC Game Pass"],
                     "predicted_months": 0.0,
@@ -104,7 +123,7 @@ class GameServicePredictor:
                     "tier": "Microsoft-Owned (Activision-Blizzard)",
                     "category": "Very Likely (Staggered Release)",
                     "confidence": 85,
-                    "reasoning": f"{publisher} is owned by Microsoft (acquired 2023). Games are joining Game Pass on a staggered schedule. Newer titles are highly likely to arrive soon.",
+                    "reasoning": f"{publisher} is owned by Microsoft. Games are joining Game Pass on a staggered schedule. Note: New releases require Xbox Game Pass Ultimate or PC Game Pass for Day One access.",
                     "first_party": True,
                     "available_on": ["Xbox Game Pass Ultimate", "PC Game Pass"],
                     "predicted_months": 3.0,
@@ -120,7 +139,7 @@ class GameServicePredictor:
                     "tier": "Microsoft-Owned (Bethesda/ZeniMax)",
                     "category": "Very Likely (Within 6 Months)",
                     "confidence": 90,
-                    "reasoning": f"{publisher} is owned by Microsoft (acquired 2021). Most Bethesda titles join Game Pass within 6 months, often Day One for new releases.",
+                    "reasoning": f"{publisher} is owned by Microsoft. Most titles join Game Pass Day One (requires Ultimate or PC Game Pass).",
                     "first_party": True,
                     "available_on": ["Xbox Game Pass Ultimate", "PC Game Pass"],
                     "predicted_months": 3.0,
@@ -283,6 +302,39 @@ class GameServicePredictor:
             if not history or not history.get("appeared"):
                 print(f"  {game_name}: Not in history")
                 return None
+
+            last_appearance = history.get("last_appearance")
+            if last_appearance is None or pd.isna(last_appearance):
+                print(f"  {game_name}: In history but no date")
+                return None
+
+            months_since = (datetime.now() - last_appearance).days / 30
+            print(f"  {game_name}: Last appeared {months_since:.1f} months ago")
+
+            # --- HUMBLE BUNDLE SPECIAL LOGIC ---
+            if self.platform_name == "Humble Choice":
+                # Calculate theoretical wait time if it WERE to repeat
+                if history["repeat_count"] == 1:
+                    theoretical_months = max(0, self.avg_repeat_interval - months_since)
+                else:
+                    avg_interval = history.get("avg_interval_months", self.avg_repeat_interval)
+                    theoretical_months = max(0, avg_interval - months_since)
+
+                last_date_str = last_appearance.strftime("%B %Y")
+
+                return {
+                    "category": "Very unlikely (Already Appeared)",
+                    "confidence": 95,
+                    "predicted_months": 0,
+                    "reasoning": f"This game has already appeared in a Humble Choice/Monthly bundle ({last_date_str}). Repeat appearances are extremely rare.",
+                    "sample_size": history["repeat_count"],
+                    "tier": "Historical Lookup (Humble No-Repeat Rule)",
+                    "recently_appeared": False,
+                    "months_since_last": 0,
+                    "theoretical_wait_time": theoretical_months, # For technical display
+                    "last_appearance_date": last_date_str
+                }
+            # -----------------------------------
 
             last_appearance = history.get("last_appearance")
             if last_appearance is None or pd.isna(last_appearance):

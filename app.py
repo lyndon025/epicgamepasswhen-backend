@@ -102,6 +102,24 @@ psplus_predictor = GameServicePredictor(
 # ============================================================================
 
 
+
+humble_predictor = GameServicePredictor(
+    csv_path=os.path.join(BASE_DIR, "HB.csv"),
+    xgb_model_path=os.path.join(MODEL_DIR, "xgb_humblebundle_model.pkl"),
+    publisher_stats_path=os.path.join(MODEL_DIR, "publisher_statistics_humblebundle.csv"),
+    publisher_encoder_path=os.path.join(MODEL_DIR, "publisher_encoder_humblebundle.pkl"),
+    platform_name="Humble Choice",
+    avg_repeat_interval=24.0,
+    repeat_confidence_mult=1.0,
+    date_column="Added to Service",
+    date_format="%m/%d/%Y",
+    model_quality_mult=0.7,
+    max_confidence_cap=85,
+    disclaimer="Prediction based on Humble Choice history",
+    platform_check=check_pc_platform,
+)
+
+
 @app.route("/api/predict", methods=["POST"])
 def predict():
     data = request.json
@@ -126,6 +144,8 @@ def predict():
         predictor = xbox_predictor
     elif platform == "psplus":
         predictor = psplus_predictor
+    elif platform == "humble":
+        predictor = humble_predictor
     else:
         return jsonify({"error": f"Unknown platform: {platform}"}), 400
 
@@ -215,6 +235,7 @@ def health():
                 "epic": "v4.2 XGBoost + Two-Tier",
                 "gamepass": "v1.0 XGBoost + Two-Tier + First-Party",
                 "psplus": "v1.0 XGBoost + Two-Tier",
+                "humble": "v1.0 XGBoost + Two-Tier"
             },
         }
     )
