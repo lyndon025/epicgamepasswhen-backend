@@ -420,14 +420,9 @@ class GameServicePredictor:
 
         predicted_log_days = self.xgb_model.predict(features)[0]
 
-        # INVERT LOG TRANSFORMATION (if model was trained with log)
-        # Check which platform this is - Epic doesn't use log, Xbox/PS do
-        if self.platform_name in ["Xbox Game Pass", "PS Plus Extra"]:
-            # These were trained with log transformation - invert it
-            predicted_days = np.exp(predicted_log_days)
-        else:
-            # Epic was trained without log - use raw value
-            predicted_days = predicted_log_days
+        # INVERT LOG TRANSFORMATION
+        # All models (Xbox, PS, Epic, Humble) are trained with log(days), so we must invert it.
+        predicted_days = np.exp(predicted_log_days)
 
         predicted_months = predicted_days / 30
 
