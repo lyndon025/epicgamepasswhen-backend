@@ -20,7 +20,7 @@ def check_pc_platform(platforms_data, platform_name):
                 "tier": "Platform Check",
                 "category": "not on pc (console exclusive)",
                 "confidence": 95,
-                "reasoning": f"Game is not available on PC. Available on: {', '.join([p for p in platform_names if p])}. Epic Games Store only offers PC games.",
+                "reasoning": f"Game is not available on PC. Available on: {', '.join([p for p in platform_names if p])}. {platform_name} only offers PC games.",
                 "platforms": platform_names,
             }
     except Exception as e:
