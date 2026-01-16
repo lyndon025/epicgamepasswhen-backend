@@ -79,12 +79,12 @@ class GameServicePredictor:
         """Remove all punctuation except spaces, convert to lowercase"""
         return "".join(c for c in title.lower() if c.isalnum() or c.isspace())
 
-    def extract_numeral(self, title):
-        """Extract numeral suffix (Roman or digit) from title"""
-        # Strip all punctuation before searching for numerals
+    def extract_numbers(self, title):
+        """Extract all numbers (digits and Roman numerals) from title"""
+        # Strip all punctuation except spaces before searching
         cleaned_title = re.sub(r"[^a-z0-9ivxlcdm\s]", "", title.lower())
-        match = re.search(r"\b([ivxlcdm]+|\d+)$", cleaned_title)
-        return match.group(1) if match else None
+        matches = re.findall(r"\b(\d+|[ivxlcdm]+)\b", cleaned_title)
+        return set(matches)
 
     def _check_first_party_publisher(self, publisher):
         """Check if publisher is a first-party publisher for this platform"""
@@ -232,8 +232,8 @@ class GameServicePredictor:
             best_score = 0
             threshold = 0.90  # Threshold for fuzzy matching
 
-            # Extract numeral from query
-            query_numeral = self.extract_numeral(game_name)
+            # Extract numbers from query
+            query_numbers = self.extract_numbers(game_name)
             normalized_query = self.normalize_title(game_name)
 
             for csv_game_name in self.df["game_name"].unique():
@@ -242,13 +242,13 @@ class GameServicePredictor:
                     None, normalized_query, normalized_csv
                 ).ratio()
 
-                csv_numeral = self.extract_numeral(csv_game_name)
+                csv_numbers = self.extract_numbers(csv_game_name)
 
-                # Only accept match if numerals match or both None
+                # Only accept match if extracted numbers are identical
                 if (
                     similarity > best_score
                     and similarity >= threshold
-                    and query_numeral == csv_numeral
+                    and query_numbers == csv_numbers
                 ):
                     best_score = similarity
                     best_match = csv_game_name
