@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import re
 from difflib import SequenceMatcher
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 
 class GameServicePredictor:
@@ -114,7 +114,9 @@ class GameServicePredictor:
                     "predicted_days": 0.0,
                     "publisher_game_count": None,
                     "publisher_consistency": None,
+                    "publisher_consistency": None,
                     "sample_size": None,
+                    "prediction_basis": "release_date",
                 }
 
             # Check if it's Activision-Blizzard (Microsoft-owned since 2023)
@@ -130,7 +132,9 @@ class GameServicePredictor:
                     "predicted_days": 90.0,
                     "publisher_game_count": None,
                     "publisher_consistency": None,
+                    "publisher_consistency": None,
                     "sample_size": None,
+                    "prediction_basis": "wait_time",
                 }
 
             # Check if it's Bethesda (Microsoft-owned since 2021)
@@ -146,7 +150,9 @@ class GameServicePredictor:
                     "predicted_days": 90.0,
                     "publisher_game_count": None,
                     "publisher_consistency": None,
+                    "publisher_consistency": None,
                     "sample_size": None,
+                    "prediction_basis": "release_date",
                 }
 
         elif self.platform_name == "PS Plus Extra":
@@ -162,7 +168,9 @@ class GameServicePredictor:
                     "predicted_days": 540.0,
                     "publisher_game_count": None,
                     "publisher_consistency": None,
+                    "publisher_consistency": None,
                     "sample_size": None,
+                    "prediction_basis": "release_date",
                 }
 
         return None
@@ -209,16 +217,18 @@ class GameServicePredictor:
         return max(min(int(base), self.max_confidence_cap), 5)
 
     def _months_to_bucket(self, months):
-        if months <= 6:
+        if months <= 0:
+            return "Good chance of coming soon (Past Typical Date)"
+        elif months <= 6:
             return "within 6 months"
         elif months <= 12:
             return "within 6-12 months"
         elif months <= 24:
             return "more than 12 months"
         elif months <= 48:
-            return "more than 24 months"
+            return "2-3 years"
         else:
-            return "as good as never (many years)"
+            return "more than 3 years"
 
     def check_if_appeared(self, game_name):
         """Check if game has appeared in service before - with fuzzy matching"""
@@ -332,7 +342,9 @@ class GameServicePredictor:
                     "recently_appeared": False,
                     "months_since_last": 0,
                     "theoretical_wait_time": theoretical_months, # For technical display
-                    "last_appearance_date": last_date_str
+                    "theoretical_wait_time": theoretical_months, # For technical display
+                    "last_appearance_date": last_date_str,
+                    "prediction_basis": "wait_time",
                 }
             # -----------------------------------
 
@@ -356,7 +368,7 @@ class GameServicePredictor:
                 confidence = self._calculate_confidence(
                     history["repeat_count"], history.get("cv"), False, True
                 )
-                reasoning = f"Appeared {history['repeat_count']} times. Avg interval: {avg_interval:.0f} months. Last: {months_since:.0f} months ago."
+                reasoning = f"Appeared {history['repeat_count']} times. Avg interval: {avg_interval:.0f} months. Last: {months_since:.0f} months ago. Prediction is estimated wait time from today."
 
             # Check if game appeared recently (within 12 months)
             recently_appeared = months_since <= 12
@@ -372,7 +384,10 @@ class GameServicePredictor:
                 "sample_size": history["repeat_count"],
                 "tier": "Historical Lookup (Repeat Pattern)",
                 "recently_appeared": recently_appeared,
+                "recently_appeared": recently_appeared,
                 "months_since_last": float(months_since),
+                "prediction_basis": "wait_time",
+                "projected_arrival": (datetime.now() + timedelta(days=predicted_months * 30)).strftime("%B %Y"),
             }
         except Exception as e:
             print(f"Error in predict_repeat: {e}")
@@ -422,9 +437,37 @@ class GameServicePredictor:
 
         # INVERT LOG TRANSFORMATION
         # All models (Xbox, PS, Epic, Humble) are trained with log(days), so we must invert it.
-        predicted_days = np.exp(predicted_log_days)
+        predicted_days_total = np.exp(predicted_log_days)
+        predicted_months_total = predicted_days_total / 30
 
-        predicted_months = predicted_days / 30
+        # Calculate remaining time if release date is known
+        days_remaining = predicted_days_total
+        months_remaining = predicted_months_total
+        basis = "from_release" # Fallback if no release date
+        
+        release_date_obj = pd.to_datetime(release_date, errors="coerce")
+        time_context = ""
+
+        if pd.notna(release_date_obj):
+            now = datetime.now()
+            if release_date_obj > now:
+                 # Future release
+                 days_until_release = (release_date_obj - now).days
+                 days_remaining = days_until_release + predicted_days_total
+                 months_remaining = days_remaining / 30
+                 basis = "wait_time" # From today
+                 time_context = f"Game releases in {days_until_release} days. Typical wait: {predicted_months_total:.1f} months after release."
+            else:
+                 # Past release
+                 days_since_release = (now - release_date_obj).days
+                 days_remaining = predicted_days_total - days_since_release
+                 months_remaining = days_remaining / 30
+                 basis = "wait_time" # From today
+                 
+                 if days_remaining <= 0:
+                     time_context = f"Released {days_since_release} days ago. Typical wait is {predicted_days_total:.0f} days. Already past usual date."
+                 else:
+                     time_context = f"Released {days_since_release} days ago. Typical wait is {predicted_days_total:.0f} days."
 
         confidence = self._calculate_confidence(
             int(pub_stats["pub_count"]),
@@ -433,8 +476,16 @@ class GameServicePredictor:
             False,
         )
 
-        category = self._months_to_bucket(predicted_months)
-        reasoning = f"XGBoost prediction for {self.platform_name}: {predicted_days:.0f} days ({predicted_months:.0f} months). Publisher '{publisher}' has {int(pub_stats['pub_count'])} games on service."
+        category = self._months_to_bucket(months_remaining)
+        
+        reasoning = ""
+        if time_context:
+            reasoning += f"{time_context}\n"
+            reasoning += f"Expect arrival in ~{max(0, months_remaining):.1f} months.\n"
+        else:
+             reasoning += f"Typical wait is {predicted_days_total:.0f} days ({predicted_months_total:.0f} months) after release.\n"
+             
+        reasoning += f"Publisher '{publisher}' has {int(pub_stats['pub_count'])} games on service."
 
         if self.disclaimer:
             reasoning += f" {self.disclaimer}"
@@ -442,12 +493,17 @@ class GameServicePredictor:
         return {
             "category": category,
             "confidence": confidence,
-            "predicted_months": float(predicted_months),
-            "predicted_days": float(predicted_days),
+            "predicted_months": float(months_remaining), # Return REMAINING time
+            "predicted_days": float(days_remaining),
             "reasoning": reasoning,
             "publisher_game_count": int(pub_stats["pub_count"]),
             "publisher_consistency": float(pub_stats["pub_cv"]),
             "tier": "XGBoost ML Prediction (New Game)",
+            "prediction_basis": basis,
+            "publisher_avg_wait_days": float(pub_stats["pub_avg_days"]),
+            "predicted_total_days": float(predicted_days_total),
+            "metacritic_score_used": float(meta_score),
+            "projected_arrival": (datetime.now() + timedelta(days=days_remaining)).strftime("%B %Y"),
         }
 
     def predict(
